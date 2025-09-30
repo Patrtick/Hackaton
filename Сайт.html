@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Terraform JSON-lines Log Viewer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  body { font-family: Inter, Roboto, Arial, sans-serif; margin: 18px; color:#111; }
+  header { display:flex; gap:12px; align-items:center; margin-bottom:12px; }
+  input[type=file] { padding:6px; }
+  .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .btn { padding:6px 10px; border-radius:6px; border:1px solid #ccc; background:#fff; cursor:pointer; }
+  .btn:active{transform:translateY(1px)}
+  table { width:100%; border-collapse:collapse; margin-top:12px; font-size:13px; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid #eee; vertical-align:top; }
+  th { background:#fafafa; position:sticky; top:0; z-index:2; }
+  tbody tr:hover { background:#fbfbff; }
+  .level { font-weight:600; padding:2px 6px; border-radius:6px; display:inline-block; font-size:12px; }
+  .level-trace { color:#6b7280; background:#f3f4f6; }
+  .level-debug { color:#0ea5e9; background:#ecfeff; }
+  .level-info  { color:#065f46; background:#ecfdf5; }
+  .level-warn  { color:#92400e; background:#fff7ed; }
+  .level-error { color:#991b1b; background:#ffefef; }
+  .muted { color:#6b7280; font-size:12px; }
+  .msg { white-space:pre-wrap; font-family:monospace; }
+  .section { padding:8px; border-radius:6px; margin-bottom:8px; background:#f8fafc; border:1px dashed #e6eef8; }
+  .section .title { font-weight:700; }
+  .json-collapsed { background:#fff; border:1px solid #eee; padding:8px; border-radius:6px; font-family:monospace; font-size:13px; white-space:pre; max-height:220px; overflow:auto; }
+  .small { font-size:12px; color:#444 }
+  .highlight { outline:2px solid #fde68a; background:#fff7cc; }
+  .spinner { width:14px;height:14px;border:2px solid #ddd;border-top-color:#777;border-radius:50%;display:inline-block; animation: spin 1s linear infinite; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  .details { font-size:13px; color:#333 }
+  .path-input { width:160px; padding:4px 6px; border-radius:4px; border:1px solid #ddd; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <strong>Terraform JSON-lines Log Viewer</strong>
+    <div class="small">Поддерживает эвристическое извлечение timestamp/level, секции plan/apply и ленивое разворачивание JSON тел tf_http_*.</div>
+  </div>
+
+  <div style="margin-left:auto" class="controls">
+    <input id="fileInput" type="file" accept=".json,.log,.txt" />
+    <button id="clearBtn" class="btn">Сброс</button>
+  </div>
+</header>
+
+<section id="meta"></section>
+
+<section class="controls" style="margin-top:8px; gap:10px;">
+  <label class="small">Фильтр уровня:</label>
+  <select id="levelFilter" class="path-input">
+    <option value="all">Все</option>
+    <option value="trace">TRACE</option>
+    <option value="debug">DEBUG</option>
+    <option value="info">INFO</option>
+    <option value="warn">WARN</option>
+    <option value="error">ERROR</option>
+  </select>
+
+  <label class="small">Поиск (message/module/raw):</label>
+  <input id="searchInput" class="path-input" placeholder="строка поиска..." />
+
+  <label class="small">Показывать JSON-тела (по умолчанию скрыты):</label>
+  <input id="toggleAllBodies" type="checkbox" />
+
+  <button id="analyzeBtn" class="btn">Анализировать файл</button>
+</section>
+
+<!-- sections summary -->
+<div id="sectionsContainer" style="margin-top:12px"></div>
+
+<!-- table -->
+<div style="margin-top:12px; overflow:auto; max-height:60vh;">
+  <table>
+    <thead>
+      <tr>
+        <th style="width:180px">Время</th>
+        <th style="width:110px">Уровень</th>
+        <th>Сообщение / подсказки</th>
+        <th style="width:180px">Модуль / секция</th>
+      </tr>
+    </thead>
+    <tbody id="logTable"></tbody>
+  </table>
+</div>
+
+<script>
+/* ---------- эвристики и регексы ---------- */
+const TS_RE = /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+\-]\d{2}:\d{2})?)/;
+const LEVEL_RE = /\b(trace|debug|info|warn|warning|error|fatal)\b/i;
+/* ключевые слова для описания секций plan/apply — расширяемый список */
+const SECTION_START_KEYWORDS = [
+  /starting.*\b(plan|apply)\b/i,
+  /\b(plan|apply) operation\b/i,
+  /^\s*Plan:/i,
+  /\bterraform plan\b/i
+];
+const SECTION_END_KEYWORDS = [
+  /\bApply complete\b/i,
+  /\bapply complete\b/i,
+  /^\s*Plan:.*to add.*to change.*to destroy/i,
+  /\bPlan:.*to add/i,
+  /\bend of plan/i
+];
+
+/* для больших файлов — парсим и добавляем партиями */
+const BATCH_SIZE = 500; // строк за интервал
+
+/* ---------- UI refs ---------- */
+const fileInput = document.getElementById('fileInput');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const logTable = document.getElementById('logTable');
+const metaDiv = document.getElementById('meta');
+const sectionsContainer = document.getElementById('sectionsContainer');
+const levelFilter = document.getElementById('levelFilter');
+const searchInput = document.getElementById('searchInput');
+const clearBtn = document.getElementById('clearBtn');
+const toggleAllBodies = document.getElementById('toggleAllBodies');
+
+let parsedLogs = []; // { timestamp, level, message, module, raw, tfSection, bodies: {req,res} }
+
+/* ---------- события ---------- */
+clearBtn.addEventListener('click', () => {
+  parsedLogs = []; logTable.innerHTML=''; metaDiv.innerHTML=''; sectionsContainer.innerHTML='';
+  fileInput.value = '';
+});
+analyzeBtn.addEventListener('click', readAndParseFile);
+levelFilter.addEventListener('change', renderTable);
+searchInput.addEventListener('input', debounce(renderTable, 250));
+toggleAllBodies.addEventListener('change', () => {
+  document.querySelectorAll('.body-toggle')?.forEach(btn => {
+    if (toggleAllBodies.checked && btn.dataset.state === 'hidden') btn.click();
+    if (!toggleAllBodies.checked && btn.dataset.state === 'shown') btn.click();
+  });
+});
+
+/* also allow auto analyze on select */
+fileInput.addEventListener('change', () => {
+  if (fileInput.files && fileInput.files.length) {
+    // можно сразу — но оставлю по явному нажатию кнопки
+    // readAndParseFile();
+  }
+});
+
+/* ---------- чтение и парсинг ---------- */
+function readAndParseFile() {
+  const f = fileInput.files && fileInput.files[0];
+  if (!f) { alert('Выберите файл с логом (.json).'); return; }
+
+  parsedLogs = [];
+  logTable.innerHTML = '';
+  metaDiv.innerHTML = `<div class="small">Чтение файла <strong>${escapeHtml(f.name)}</strong> — ${f.size} байт... <span class="spinner"></span></div>`;
+
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const text = e.target.result;
+    // разделяем по строкам. учтём разные окончания строк
+    const lines = text.split(/\r?\n/);
+    metaDiv.innerHTML = `<div class="small">Проанализировано строк: ${lines.length}</div>`;
+    // парсим партиями чтобы UI не завис
+    for (let i=0; i < lines.length; i += BATCH_SIZE) {
+      const chunk = lines.slice(i, i + BATCH_SIZE);
+      processChunk(chunk);
+      await sleep(0); // yield
+    }
+    postProcessSections();
+    renderSectionsSummary();
+    renderTable();
+    metaDiv.innerHTML += `<div class="small" style="margin-top:6px">Готово. Записей: ${parsedLogs.length}</div>`;
+  };
+  reader.onerror = () => alert('Ошибка чтения файла');
+  reader.readAsText(f);
+}
+
+function processChunk(lines) {
+  for (const rawLine of lines) {
+    if (!rawLine || !rawLine.trim()) continue;
+    let parsed = tryParseJSON(rawLine);
+    if (parsed) {
+      // стандартный json-lines формат (как у тебя)
+      const ts = parsed['@timestamp'] || findTimestampInRaw(rawLine);
+      const lvl = parsed['@level'] || findLevelInRaw(rawLine);
+      const mod = parsed['@module'] || parsed['module'] || parsed['@caller'] || '';
+      const msg = parsed['@message'] || parsed['message'] || inferMessageFromObject(parsed) || rawLine;
+      const bodies = extractBodiesFromObject(parsed); // не парсим JSON тела здесь — только сохраняем строку
+      parsedLogs.push({timestamp:ts, level:normalizeLevel(lvl), message:msg, module:mod, raw:rawLine, parsedObj:parsed, bodies});
+    } else {
+      // не JSON — попытка эвристического вытаскивания ts/level/msg
+      const ts = findTimestampInRaw(rawLine);
+      const lvl = findLevelInRaw(rawLine);
+      const msg = inferMessageFromText(rawLine);
+      parsedLogs.push({timestamp:ts, level:normalizeLevel(lvl), message:msg, module:'', raw:rawLine, parsedObj:null, bodies:{}});
+    }
+  }
+}
+
+/* ---------- вспомогательные эвристики ---------- */
+function tryParseJSON(line) {
+  try {
+    // некоторые строки могут содержать одно JSON-объектное выражение после префикса — пробуем чисто JSON.parse
+    return JSON.parse(line);
+  } catch(e) {
+    return null;
+  }
+}
+
+function findTimestampInRaw(s) {
+  const m = s.match(TS_RE);
+  return m ? m[1] : '';
+}
+
+function findLevelInRaw(s) {
+  const m = s.match(LEVEL_RE);
+  return m ? m[1] : '';
+}
+
+function normalizeLevel(l) {
+  if (!l) return '';
+  l = String(l).toLowerCase();
+  if (l === 'warning') l = 'warn';
+  if (['trace','debug','info','warn','error','fatal'].includes(l)) return l;
+  return l;
+}
+
+function inferMessageFromObject(obj) {
+  // попробуем собрать человекочитаемое сообщение из полей
+  if (obj['@message']) return obj['@message'];
+  if (obj['message']) return obj['message'];
+  // если есть много полей — вернём краткое превью
+  const keys = Object.keys(obj).filter(k => !k.startsWith('@')).slice(0,3);
+  return keys.length ? keys.map(k => `${k}=${summarize(obj[k])}`).join(' | ') : JSON.stringify(obj).slice(0,200);
+}
+
+function inferMessageFromText(s) {
+  // уберём timestamp/level если есть
+  let t = s.replace(TS_RE, '').replace(LEVEL_RE, '');
+  // коротко
+  return t.length > 400 ? t.slice(0,400) + '...' : t;
+}
+
+function summarize(v) {
+  if (v === null) return 'null';
+  if (typeof v === 'object') return JSON.stringify(v).slice(0,60);
+  return String(v).slice(0,60);
+}
+
+/* извлечение полей tf_http_req_body, tf_http_res_body (сохраняем строки, не парсим) */
+function extractBodiesFromObject(obj) {
+  const bodies = {};
+  for (const k of Object.keys(obj || {})) {
+    if (/tf_http_(req|res)_body/i.test(k)) {
+      bodies[k] = obj[k];
+    }
+  }
+  return bodies;
+}
+
+/* ---------- секции plan/apply (эвристика) ---------- */
+function postProcessSections() {
+  // проходим по parsedLogs и помечаем tfSection по ключевым словам
+  let currentSection = null;
+  parsedLogs.forEach((entry, idx) => {
+    const line = (entry.parsedObj && entry.parsedObj['@message']) ? entry.parsedObj['@message'] : entry.message || entry.raw;
+    // check start
+    if (!currentSection) {
+      if (SECTION_START_KEYWORDS.some(r => r.test(line))) {
+        currentSection = { type: determineSectionType(line), startIdx: idx, endIdx: null };
+      }
+    } else {
+      // if currently in section, check if we should end
+      if (SECTION_END_KEYWORDS.some(r => r.test(line))) {
+        currentSection.endIdx = idx;
+        // assign section label to entries
+        labelSection(currentSection);
+        currentSection = null;
+      }
+    }
+  });
+  // если осталась незакрытая секция — закроем концом файла
+  if (currentSection) {
+    currentSection.endIdx = parsedLogs.length - 1;
+    labelSection(currentSection);
+  }
+}
+
+function determineSectionType(line) {
+  if (/\bplan\b/i.test(line) && !/\bapply\b/i.test(line)) return 'plan';
+  if (/\bapply\b/i.test(line) && !/\bplan\b/i.test(line)) return 'apply';
+  // fallback: contains both or ambiguous -> generic
+  return /plan/i.test(line) ? 'plan' : 'apply';
+}
+
+function labelSection(section) {
+  for (let i = section.startIdx; i <= section.endIdx; i++) {
+    parsedLogs[i].tfSection = { type: section.type, start: section.startIdx, end: section.endIdx };
+  }
+}
+
+/* ---------- рендеринг секций (сводка) ---------- */
+function renderSectionsSummary() {
+  sectionsContainer.innerHTML = '';
+  const groups = {}; // key: `${type}:${start}-${end}`
+  parsedLogs.forEach((p, idx) => {
+    if (p.tfSection) {
+      const key = `${p.tfSection.type}:${p.tfSection.start}-${p.tfSection.end}`;
+      groups[key] = groups[key] || { type: p.tfSection.type, start: p.tfSection.start, end: p.tfSection.end, count:0 };
+      groups[key].count++;
+    }
+  });
+  const keys = Object.keys(groups);
+  if (!keys.length) {
+    sectionsContainer.innerHTML = '<div class="section small">Секции plan/apply не найдены.</div>';
+    return;
+  }
+  for (const k of keys) {
+    const g = groups[k];
+    const el = document.createElement('div');
+    el.className = 'section';
+    el.innerHTML = `<div class="title">${g.type.toUpperCase()} — строки ${g.start + 1}..${g.end + 1} (записей: ${g.count})</div>
+      <div class="small">Нажмите «Показать» чтобы подсветить эту секцию в таблице</div>
+      <div style="margin-top:6px"><button class="btn" data-range="${g.start},${g.end}">Показать</button></div>`;
+    sectionsContainer.appendChild(el);
+    el.querySelector('button').addEventListener('click', (ev) => {
+      const [s,e] = ev.target.dataset.range.split(',').map(Number);
+      highlightRange(s,e);
+      // прокрутка к первой записи
+      const row = document.querySelector(`tr[data-idx="${s}"]`);
+      if (row) row.scrollIntoView({behavior:'smooth', block:'center'});
+    });
+  }
+}
+
+function highlightRange(start, end) {
+  // снять прежние
+  document.querySelectorAll('tr').forEach(r => r.classList.remove('highlight'));
+  for (let i=start; i<=end; i++) {
+    const tr = document.querySelector(`tr[data-idx="${i}"]`);
+    if (tr) tr.classList.add('highlight');
+  }
+}
+
+/* ---------- рендер таблицы (с фильтрами и ленивой подгрузкой JSON) ---------- */
+function renderTable() {
+  const lvl = levelFilter.value;
+  const q = (searchInput.value || '').toLowerCase();
+  logTable.innerHTML = '';
+  let count = 0;
+  for (let i=0; i<parsedLogs.length; i++) {
+    const e = parsedLogs[i];
+    if (lvl !== 'all' && e.level !== lvl) continue;
+    if (q) {
+      const hay = ((e.message||'') + ' ' + (e.module||'') + ' ' + (e.raw||'')).toLowerCase();
+      if (!hay.includes(q)) continue;
+    }
+    count++;
+    const tr = document.createElement('tr');
+    tr.dataset.idx = i;
+    tr.innerHTML = `
+      <td class="muted">${escapeHtml(formatTimestamp(e.timestamp))}</td>
+      <td>${renderLevelBadge(e.level)}</td>
+      <td>
+        <div class="msg">${escapeHtml(truncateMsg(e.message || e.raw || ''))}</div>
+        <div class="details small">${escapeHtml(summaryDetails(e))}</div>
+        ${renderBodiesPreview(i, e.bodies)}
+      </td>
+      <td class="muted">${escapeHtml(e.module || '')}${e.tfSection ? `<div class="small">section: ${e.tfSection.type} (${e.tfSection.start+1}-${e.tfSection.end+1})</div>` : ''}</td>
+    `;
+    logTable.appendChild(tr);
+  }
+  metaDiv.innerHTML = `<div class="small">Отображено записей: ${count} из ${parsedLogs.length}</div>`;
+}
+
+/* helpers for rendering */
+function renderLevelBadge(level) {
+  const l = level || 'info';
+  const cls = 'level level-' + (l || 'info');
+  return `<span class="${cls}">${(l||'').toUpperCase()}</span>`;
+}
+
+function truncateMsg(s) {
+  if (!s) return '';
+  return s.length > 800 ? s.slice(0,800) + ' …' : s;
+}
+
+function summaryDetails(e) {
+  const parts = [];
+  if (e.parsedObj && e.parsedObj['@caller']) parts.push('caller:' + e.parsedObj['@caller']);
+  if (e.parsedObj && e.parsedObj.tf_resource_type) parts.push('res:' + e.parsedObj.tf_resource_type);
+  return parts.join(' | ');
+}
+
+/* render preview for bodies: show button "Show JSON" which will lazy parse on click */
+function renderBodiesPreview(idx, bodies) {
+  if (!bodies || Object.keys(bodies).length === 0) return '';
+  let html = '<div style="margin-top:8px">';
+  for (const k of Object.keys(bodies)) {
+    const id = `body-${idx}-${escapeId(k)}`;
+    const btnId = `btn-${idx}-${escapeId(k)}`;
+    const sample = summarize(bodies[k]);
+    html += `<div style="margin-top:6px">
+      <strong>${escapeHtml(k)}</strong>
+      <button id="${btnId}" data-key="${k}" class="btn body-toggle" data-state="hidden" style="margin-left:8px">Показать JSON</button>
+      <span class="small" style="margin-left:8px">${escapeHtml(sample)}</span>
+      <div id="${id}" style="margin-top:6px; display:none;"></div>
+      <div id="${id}-controls" style="margin-top:6px; display:none;">
+        <input placeholder="dot.path.to.key (опционально)" class="path-input" id="${id}-path" />
+        <button class="btn" id="${id}-path-btn">Показать путь</button>
+        <button class="btn" id="${id}-raw-btn">Показать сырой</button>
+      </div>
+    </div>`;
+  }
+  html += '</div>';
+  // attach handlers later by delegating
+  setTimeout(()=>attachBodyHandlers(idx, bodies), 10);
+  return html;
+}
+
+function attachBodyHandlers(idx, bodies) {
+  for (const k of Object.keys(bodies)) {
+    const id = `body-${idx}-${escapeId(k)}`;
+    const btnId = `btn-${idx}-${escapeId(k)}`;
+    const btn = document.getElementById(btnId);
+    if (!btn) continue;
+    if (btn.dataset._attached) continue;
+    btn.dataset._attached = '1';
+    btn.addEventListener('click', async () => {
+      const target = document.getElementById(id);
+      const controls = document.getElementById(id + '-controls');
+      if (btn.dataset.state === 'hidden') {
+        btn.textContent = 'Скрыть JSON';
+        btn.dataset.state = 'shown';
+        // лениво парсим JSON — может быть строкой внутри
+        controls.style.display = 'block';
+        target.style.display = 'block';
+        target.innerHTML = `<div class="small">Парсинг...</div>`;
+        await sleep(0);
+        const raw = bodies[k];
+        // если raw уже объект — pretty print, иначе попробуем распарсить
+        let js = null;
+        if (typeof raw === 'object') js = raw;
+        else if (typeof raw === 'string') {
+          // возможно в логе он экранирован — пытаемся восстановить
+          try { js = JSON.parse(raw); } catch(e) {
+            // бывает что это form-encoded или просто текст с JSON внутри
+            const bracketPos = raw.indexOf('{');
+            if (bracketPos >= 0) {
+              const sub = raw.slice(bracketPos);
+              try { js = JSON.parse(sub); } catch(e2) {
+                // не JSON — оставляем как текст
+                js = raw;
+              }
+            } else js = raw;
+          }
+        } else js = String(raw);
+        // show collapsed pretty JSON or text
+        if (typeof js === 'object') {
+          target.innerHTML = `<div class="json-collapsed" id="${id}-pretty">${escapeHtml(JSON.stringify(js, null, 2))}</div>`;
+        } else {
+          target.innerHTML = `<div class="json-collapsed" id="${id}-pretty">${escapeHtml(String(js))}</div>`;
+        }
+        // attach path button handlers
+        const pathInput = document.getElementById(id + '-path');
+        const pathBtn = document.getElementById(id + '-path-btn');
+        const rawBtn = document.getElementById(id + '-raw-btn');
+        pathBtn.onclick = () => {
+          const path = (pathInput.value || '').trim();
+          if (!path) { alert('Укажите путь dot.notation'); return; }
+          const extracted = safeExtractPath(js, path);
+          document.getElementById(id + '-pretty').textContent = escapeHtml(JSON.stringify(extracted, null, 2));
+        };
+        rawBtn.onclick = () => {
+          document.getElementById(id + '-pretty').textContent = escapeHtml(typeof js === 'object' ? JSON.stringify(js) : String(js));
+        };
+      } else {
+        btn.textContent = 'Показать JSON';
+        btn.dataset.state = 'hidden';
+        document.getElementById(id).style.display = 'none';
+        document.getElementById(id + '-controls').style.display = 'none';
+      }
+    });
+  }
+}
+
+/* ---------- утилиты ---------- */
+function safeExtractPath(obj, dotPath) {
+  try {
+    if (dotPath === '') return obj;
+    const parts = dotPath.split('.').map(p=>p.trim()).filter(Boolean);
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return null;
+      if (Array.isArray(cur)) {
+        // число?
+        const idx = Number(p);
+        cur = cur[idx];
+      } else {
+        cur = cur[p];
+      }
+    }
+    return cur;
+  } catch(e) { return null; }
+}
+
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  // пытаемся привести ISO к читаемому виду
+  try {
+    const d = new Date(ts);
+    if (isNaN(d)) return ts;
+    return d.toLocaleString();
+  } catch(e) { return ts; }
+}
+
+function escapeHtml(s) {
+  if (s===null || s===undefined) return '';
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;');
+}
+
+function escapeId(s){ return String(s).replace(/[^a-z0-9\-_]/gi, '_'); }
+function sleep(ms){ return new Promise(res => setTimeout(res, ms)); }
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t = setTimeout(()=>fn(...a), ms); }; }
+
+/* ---------- небольшие удобства ---------- */
+function summarize(v) {
+  if (v == null) return 'null';
+  if (typeof v === 'string') return v.length > 120 ? v.slice(0,120) + '…' : v;
+  try { return JSON.stringify(v).slice(0,120); } catch(e) { return String(v).slice(0,120); }
+}
+function escapeHtmlRaw(s){ return escapeHtml(String(s)); }
+
+/* ---------- final helpers ---------- */
+function attachBodyHandlers(idx,bodies){ /* defined earlier: placeholder to avoid lint warnings */ }
+
+/* ensure attachBodyHandlers defined properly (redeclaration avoided) */
+attachBodyHandlers = attachBodyHandlers;
+
+/* ---------- готово ---------- */
+</script>
+</body>
+</html>
