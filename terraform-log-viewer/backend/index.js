@@ -254,6 +254,54 @@ app.post('/upload', upload.single('file'), (req, res) => {
   }
 });
 
+// New API for programmatic integration: parse text directly
+app.post('/api/parse', (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+  try {
+    const parsed = parseFileText(text);
+    res.json({ ok: true, parsed });
+  } catch (e) {
+    console.error('parse error', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// New API to get summary (stats, errors, planSummary)
+app.post('/api/summary', (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+  try {
+    const parsed = parseFileText(text);
+    const summary = {
+      stats: parsed.stats,
+      errors: parsed.errors,
+      planSummary: parsed.planSummary,
+      resourceCounts: parsed.resourceCounts,
+      providerCounts: parsed.providerCounts,
+      timeline: parsed.timeline,
+      timelineErrors: parsed.timelineErrors
+    };
+    res.json({ ok: true, summary });
+  } catch (e) {
+    console.error('parse error', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// New API to get errors only
+app.post('/api/errors', (req, res) => {
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ ok: false, error: 'text required' });
+  try {
+    const parsed = parseFileText(text);
+    res.json({ ok: true, errors: parsed.errors });
+  } catch (e) {
+    console.error('parse error', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ ok:true }));
 
 const port = process.env.PORT || 5000;

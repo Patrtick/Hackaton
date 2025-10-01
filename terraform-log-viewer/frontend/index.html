@@ -45,8 +45,8 @@
         </div>
       </div>
       <div class="log-actions">
-        <button id="markReadBtn">Пометить выбранные как прочитанные</button>
-        <button id="showReadBtn">Показать/скрыть прочитанные</button>
+        <button id="markReadBtn" class="action-btn">Пометить выбранные как прочитанные</button>
+        <button id="showReadBtn" class="action-btn">Показать/скрыть прочитанные</button>
       </div>
       <div id="summaryPanel"></div>
       <div id="result"></div>
@@ -58,11 +58,11 @@
 
     <div id="advTab" class="tab-content">
       <div class="adv-row">
-        <label>tf_resource_type: <input id="advResourceType" placeholder="e.g. aws_instance"></label>
-        <label>start timestamp: <input id="advStart" placeholder="YYYY-MM-DDTHH:MM:SS"></label>
-        <label>end timestamp: <input id="advEnd" placeholder="YYYY-MM-DDTHH:MM:SS"></label>
-        <button id="advFilterBtn">Применить</button>
-        <button id="advClearBtn">Очистить</button>
+        <label>tf_resource_type: <input id="advResourceType" class="adv-input" placeholder="e.g. aws_instance"></label>
+        <label>start timestamp: <input id="advStart" class="adv-input" placeholder="YYYY-MM-DDTHH:MM:SS"></label>
+        <label>end timestamp: <input id="advEnd" class="adv-input" placeholder="YYYY-MM-DDTHH:MM:SS"></label>
+        <button id="advFilterBtn" class="action-btn">Применить</button>
+        <button id="advClearBtn" class="action-btn">Очистить</button>
       </div>
       <div>
         <h3>Цепочки по tf_req_id</h3>

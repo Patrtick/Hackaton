@@ -39,7 +39,6 @@ function setStatus(txt) { if (statusEl) statusEl.innerText = txt; }
 openFileBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', handleFileChange);
 reloadInput.addEventListener('change', handleFileChange);
-// Removed the extra click handler for reloadLabel to prevent double dialog open
 
 // unified change handler to avoid double triggers
 function handleFileChange(e) {
@@ -88,6 +87,7 @@ function renderAll() {
   renderLogs(lastParsed.lines || []);
   renderErrorsPanel(lastParsed.errors || []);
   renderChainsList(lastParsed.groups || {});
+  attachAdvancedFiltering();
 }
 
 // ---------------- Logs Tab (kept compatible, slight cleanup) ----------------
@@ -366,6 +366,55 @@ function showChain(reqId) {
   document.querySelector('.tab-btn[data-tab="logsTab"]').click();
 }
 
+// ---------------- Advanced Filtering ----------------
+function attachAdvancedFiltering() {
+  advFilterBtn.onclick = applyAdvancedFilter;
+  advClearBtn.onclick = clearAdvancedFilter;
+}
+
+function applyAdvancedFilter() {
+  const resource = advResourceType.value.trim();
+  const startTs = advStart.value.trim();
+  const endTs = advEnd.value.trim();
+  let query = '';
+  if (resource) query += resource;
+  if (startTs || endTs) {
+    // For timestamp range, we need to filter in logs tab
+    document.querySelector('.tab-btn[data-tab="logsTab"]').click();
+    filterByTimestampRange(startTs, endTs);
+  }
+  searchInput.value = query;
+  doFilter();
+}
+
+function clearAdvancedFilter() {
+  advResourceType.value = '';
+  advStart.value = '';
+  advEnd.value = '';
+  searchInput.value = '';
+  doFilter();
+}
+
+function filterByTimestampRange(start, end) {
+  // Implement timestamp range filter by hiding lines outside range
+  const startDate = start ? new Date(start) : null;
+  const endDate = end ? new Date(end) : null;
+  const container = document.getElementById('linesContainer');
+  if (!container) return;
+  const lines = container.querySelectorAll('.line');
+  lines.forEach(line => {
+    const ts = line.dataset.timestamp;
+    if (ts) {
+      const date = new Date(ts);
+      if ((startDate && date < startDate) || (endDate && date > endDate)) {
+        line.style.display = 'none';
+        return;
+      }
+    }
+    line.style.display = 'flex';
+  });
+}
+
 // ---------------- Stats Tab (completely redesigned) ----------------
 
 function renderStats(parsed) {
@@ -515,10 +564,7 @@ function renderGantt(parsed, selector) {
       const lvl = (l.level || l.cls || '').toLowerCase();
       if (lvl === 'error' || lvl === 'panic' || lvl === 'fatal') hasError = true;
     });
-    // fallback: if timestamps missing, skip
-    if (!minTs) {
-      continue;
-    }
+    if (!minTs) continue;
     items.push({ id: k, start: minTs, end: maxTs || minTs, hasError, count: cnt });
   }
   if (!items.length) { wrap.innerHTML = '<div class="chip">Нет валидных временных меток для Ганта</div>'; return; }

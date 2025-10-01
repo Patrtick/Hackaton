@@ -36,8 +36,12 @@ body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; background:var(--bg); co
 .filter-btn{padding:6px 12px; border-radius:8px; background:rgba(255,255,255,0.05); border:none; cursor:pointer; font-size:13px; color:#e6eef8}
 .filter-btn.active{background:var(--accent-gradient); font-weight:600}
 
-/* logs */
+/* log actions */
 .log-actions{display:flex; gap:8px; margin-bottom:6px}
+.action-btn{padding:6px 12px; border-radius:8px; background:rgba(255,255,255,0.05); border:none; cursor:pointer; font-size:13px; color:#e6eef8; transition:all .2s ease}
+.action-btn:hover{background:var(--accent-gradient); color:white}
+
+/* status */
 .status{margin-bottom:6px; color:#9fb4d6; font-size:13px}
 .result{background:rgba(255,255,255,0.02); padding:12px; border-radius:12px; max-height:60vh; overflow:auto; font-family:monospace; font-size:13px}
 .line{padding:8px; border-radius:8px; margin-bottom:8px; display:flex; gap:8px; align-items:flex-start}
@@ -74,6 +78,10 @@ body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; background:var(--bg); co
 .chain-item { padding: 8px; border-radius: 8px; background: rgba(255,255,255,0.05); margin-bottom: 8px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
 .chain-item:hover { background: rgba(255,255,255,0.1); }
 .view-arrow { color: #60a5fa; font-weight: bold; }
+
+/* advanced inputs and buttons */
+.adv-input{padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.1); background:transparent; color:inherit; min-width:200px}
+
 @media (max-width:900px){ .charts-grid{grid-template-columns:1fr} .chart-card canvas{height:200px !important} }
 
 
