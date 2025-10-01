@@ -9,19 +9,82 @@
 </head>
 <body>
   <div class="wrap">
-    <div id="dropzone" class="dropzone">
-      <!-- один input для всех случаев -->
-      <input id="fileInput" type="file" accept=".json,.log,.txt" style="display:none" />
-      <label for="fileInput" class="big-btn">
-        📁<br>Загрузить лог / JSON<br>
-        <small>(нажмите или перетащите)</small>
-      </label>
+
+    <!-- Стартовый экран -->
+    <div id="startScreen" class="start-screen">
+      <h1 class="big-title">Terraform Log Viewer</h1>
+      <div id="dropzone" class="dropzone">
+        <input id="fileInput" type="file" accept=".json,.log,.txt" style="display:none" />
+        <label for="fileInput" class="big-btn">
+          📁 Загрузить лог / JSON<br>
+          <small>(клик или перетащить сюда)</small>
+        </label>
+      </div>
     </div>
 
-    <div id="status" class="status"></div>
-    <div id="result" class="result"></div>
+    <!-- Экран приложения -->
+    <div id="appScreen" class="app-screen" style="display:none">
+
+      <div class="topbar">
+        <div class="title">Terraform Log Viewer</div>
+        <div>
+          <label class="reload-btn">
+            🔄 Загрузить файл
+            <input id="reloadInput" type="file" accept=".json,.log,.txt" style="display:none" />
+          </label>
+        </div>
+      </div>
+
+      <!-- Вкладки -->
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="logsTab">Логи</button>
+        <button class="tab-btn" data-tab="statsTab">Статистика</button>
+      </div>
+
+      <!-- Вкладка Логи -->
+      <div id="logsTab" class="tab-content active">
+        <div class="controls">
+          <input id="searchInput" placeholder="Поиск в логах (regexp поддерживается)" />
+          <div class="level-filters">
+            <button class="filter-btn active" data-level="error">Error</button>
+            <button class="filter-btn active" data-level="warning">Warning</button>
+            <button class="filter-btn active" data-level="info">Info</button>
+            <button class="filter-btn active" data-level="debug">Debug</button>
+            <button class="filter-btn active" data-level="normal">Other</button>
+          </div>
+        </div>
+        <div id="status" class="status"></div>
+        <div id="result" class="result"></div>
+      </div>
+
+      <!-- Вкладка Статистика -->
+      <div id="statsTab" class="tab-content">
+        <div id="summaryPanel" class="summary-panel"></div>
+        <div class="charts-grid">
+          <div class="chart-card">
+            <h3>Уровни логов</h3>
+            <canvas id="levelsChart"></canvas>
+          </div>
+          <div class="chart-card">
+            <h3>Активность по времени</h3>
+            <canvas id="timelineChart"></canvas>
+          </div>
+          <div class="chart-card">
+            <h3>Plan vs Apply</h3>
+            <canvas id="sectionsChart"></canvas>
+          </div>
+          <div class="chart-card">
+            <h3>Итог плана</h3>
+            <canvas id="planSummaryChart"></canvas>
+          </div>
+        </div>
+      </div>
+
+    </div>
   </div>
 
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
