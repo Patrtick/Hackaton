@@ -71,6 +71,9 @@ body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; background:var(--bg); co
 .chip{padding:6px 10px; border-radius:999px; background:rgba(255,255,255,0.03); font-weight:600}
 .adv-row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
 .chart-card.full-width { grid-column: 1 / -1; }
+.chain-item { padding: 8px; border-radius: 8px; background: rgba(255,255,255,0.05); margin-bottom: 8px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.chain-item:hover { background: rgba(255,255,255,0.1); }
+.view-arrow { color: #60a5fa; font-weight: bold; }
 @media (max-width:900px){ .charts-grid{grid-template-columns:1fr} .chart-card canvas{height:200px !important} }
 
 

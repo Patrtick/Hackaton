@@ -39,7 +39,7 @@ function setStatus(txt) { if (statusEl) statusEl.innerText = txt; }
 openFileBtn.addEventListener('click', () => fileInput.click());
 fileInput.addEventListener('change', handleFileChange);
 reloadInput.addEventListener('change', handleFileChange);
-document.getElementById('reloadLabel').addEventListener('click', () => reloadInput.click());
+// Removed the extra click handler for reloadLabel to prevent double dialog open
 
 // unified change handler to avoid double triggers
 function handleFileChange(e) {
@@ -345,10 +345,15 @@ function renderChainsList(groups) {
     chainsList.innerHTML = '<div class="chip">Нет цепочек</div>';
     return;
   }
+  const header = document.createElement('div');
+  header.className = 'chip';
+  header.innerText = 'Цепочки по tf_req_id (кликните для просмотра):';
+  chainsList.appendChild(header);
   keys.forEach(k => {
     const div = document.createElement('div');
     div.className = 'chain-item';
-    div.innerText = `${k} (${groups[k].length} строк)`;
+    div.innerHTML = `${k} (${groups[k].length} строк) <span class="view-arrow">→</span>`;
+    div.title = 'Кликните, чтобы показать цепочку в логах';
     div.onclick = () => showChain(k);
     chainsList.appendChild(div);
   });
@@ -510,9 +515,8 @@ function renderGantt(parsed, selector) {
       const lvl = (l.level || l.cls || '').toLowerCase();
       if (lvl === 'error' || lvl === 'panic' || lvl === 'fatal') hasError = true;
     });
-    // fallback: if timestamps missing, try to derive approximate using parsed.timestampIndex if present
+    // fallback: if timestamps missing, skip
     if (!minTs) {
-      // skip groups without timestamps — they will still be shown with zero-length bar at top time
       continue;
     }
     items.push({ id: k, start: minTs, end: maxTs || minTs, hasError, count: cnt });
@@ -529,7 +533,7 @@ function renderGantt(parsed, selector) {
   // create SVG
   const paddingLeft = 200; // label column
   const rowH = 28;
-  const height = Math.min( Math.max( items.length * rowH + 40, 120 ), 540 ); // limit height so it fits on screen
+  const height = items.length * rowH + 40;
   const width = wrap.clientWidth || 1000;
   const svgW = Math.max(width, 800);
   const svgH = height;
@@ -630,7 +634,6 @@ function renderGantt(parsed, selector) {
     wrap._resizeTimer = setTimeout(()=> renderGantt(parsed, wrap), 150);
   };
   window.addEventListener('resize', onResize);
-  // store ref so caller can remove listener if needed
   wrap._ganttResizeHandler = onResize;
 }
 
