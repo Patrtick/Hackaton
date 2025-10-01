@@ -4,7 +4,7 @@ echo ==============================
 echo Rebuilding and starting Terraform Log Viewer...
 echo ==============================
 
-docker compose build --no-cache
+REM docker compose build --no-cache
 docker compose up -d
 
 echo ==============================
