@@ -32,6 +32,11 @@ body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; background:var(--bg); co
 .controls{display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:10px}
 .controls input{padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.1); background:transparent; color:inherit; min-width:260px}
 
+/* sort controls */
+.sort-controls{display:flex; gap:8px; align-items:center; margin-bottom:10px}
+.sort-controls select{padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.1); background:#071029; color:#e6eef8; min-width:150px; appearance: none;}
+.sort-controls select option { background: #071029; color: #e6eef8; }
+
 /* filters */
 .filter-btn{padding:6px 12px; border-radius:8px; background:rgba(255,255,255,0.05); border:none; cursor:pointer; font-size:13px; color:#e6eef8}
 .filter-btn.active{background:var(--accent-gradient); font-weight:600}
@@ -80,7 +85,9 @@ body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; background:var(--bg); co
 .view-arrow { color: #60a5fa; font-weight: bold; }
 
 /* advanced inputs and buttons */
-.adv-input{padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.1); background:transparent; color:inherit; min-width:200px}
+.adv-input{padding:8px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.1); background:#071029; color:#e6eef8; min-width:200px}
+.adv-input[type="date"]::-webkit-calendar-picker-indicator,
+.adv-input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(1); background-color: #071029; color: #e6eef8; }
 
 @media (max-width:900px){ .charts-grid{grid-template-columns:1fr} .chart-card canvas{height:200px !important} }
 

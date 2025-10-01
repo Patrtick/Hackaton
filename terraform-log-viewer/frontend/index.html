@@ -44,6 +44,15 @@
           <button class="filter-btn active" data-level="normal">Other</button>
         </div>
       </div>
+      <div class="sort-controls">
+        <label>Сортировать по: 
+          <select id="sortBy">
+            <option value="time">Время</option>
+            <option value="level">Уровень</option>
+          </select>
+        </label>
+        <button id="sortOrder" class="action-btn">Новейшие сначала</button>
+      </div>
       <div class="log-actions">
         <button id="markReadBtn" class="action-btn">Пометить выбранные как прочитанные</button>
         <button id="showReadBtn" class="action-btn">Показать/скрыть прочитанные</button>
@@ -58,9 +67,11 @@
 
     <div id="advTab" class="tab-content">
       <div class="adv-row">
-        <label>tf_resource_type: <input id="advResourceType" class="adv-input" placeholder="e.g. aws_instance"></label>
-        <label>start timestamp: <input id="advStart" class="adv-input" placeholder="YYYY-MM-DDTHH:MM:SS"></label>
-        <label>end timestamp: <input id="advEnd" class="adv-input" placeholder="YYYY-MM-DDTHH:MM:SS"></label>
+        <label>tf_resource_type: <input id="advResourceType" class="adv-input" placeholder="например, aws_instance"></label>
+        <label>Начальная дата: <input type="date" id="advStartDate" class="adv-input"></label>
+        <label>Начальное время: <input type="time" id="advStartTime" class="adv-input"></label>
+        <label>Конечная дата: <input type="date" id="advEndDate" class="adv-input"></label>
+        <label>Конечное время: <input type="time" id="advEndTime" class="adv-input"></label>
         <button id="advFilterBtn" class="action-btn">Применить</button>
         <button id="advClearBtn" class="action-btn">Очистить</button>
       </div>

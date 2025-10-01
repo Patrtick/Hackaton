@@ -21,17 +21,24 @@ const markReadBtn = document.getElementById('markReadBtn');
 const showReadBtn = document.getElementById('showReadBtn');
 
 const advResourceType = document.getElementById('advResourceType');
-const advStart = document.getElementById('advStart');
-const advEnd = document.getElementById('advEnd');
+const advStartDate = document.getElementById('advStartDate');
+const advStartTime = document.getElementById('advStartTime');
+const advEndDate = document.getElementById('advEndDate');
+const advEndTime = document.getElementById('advEndTime');
 const advFilterBtn = document.getElementById('advFilterBtn');
 const advClearBtn = document.getElementById('advClearBtn');
 const chainsList = document.getElementById('chainsList');
+
+const sortBySelect = document.getElementById('sortBy');
+const sortOrderBtn = document.getElementById('sortOrder');
 
 let lastParsed = null;
 let lastRaw = '';
 let fileHash = null;
 let charts = {};
 let showRead = false;
+let currentSort = 'time'; // 'time' or 'level'
+let currentOrder = 'desc'; // 'desc' or 'asc'
 
 function setStatus(txt) { if (statusEl) statusEl.innerText = txt; }
 
@@ -88,6 +95,7 @@ function renderAll() {
   renderErrorsPanel(lastParsed.errors || []);
   renderChainsList(lastParsed.groups || {});
   attachAdvancedFiltering();
+  attachSortListeners();
 }
 
 // ---------------- Logs Tab (kept compatible, slight cleanup) ----------------
@@ -199,7 +207,7 @@ function attachFiltering() {
     btn.onclick = () => { btn.classList.toggle('active'); doFilter(); };
   });
   markReadBtn.onclick = markSelectedAsRead;
-  showReadBtn.onclick = () => { showRead = !showRead; renderLogs(lastParsed.lines || []); };
+  showReadBtn.onclick = () => { showRead = !showRead; doFilter(); };
   doFilter();
 }
 
@@ -212,27 +220,83 @@ function doFilter() {
   const allowed = filterButtons().filter(b => b.classList.contains('active')).map(b => b.dataset.level);
   const container = document.getElementById('linesContainer');
   if (!container) return;
-  const lines = container.querySelectorAll('.line');
+  const lines = Array.from(container.querySelectorAll('.line'));
   lines.forEach(line => {
     const idx = parseInt(line.dataset.idx, 10);
     const clsList = line.className.split(/\s+/);
     const level = ['error','warning','info','debug','normal','trace'].find(l => clsList.includes(l)) || 'normal';
-    if (!allowed.includes(level)) { line.style.display = 'none'; return; }
-    if (!showRead && line.classList.contains('read')) { line.style.display = 'none'; return; }
+    let visible = allowed.includes(level);
+    if (!showRead && line.classList.contains('read')) visible = false;
     if (q) {
       const hay = (line.dataset.content || '') + ' ' + (line.dataset.tfReqId || '') + ' ' + (line.dataset.tfResourceType || '');
-      if (re) {
-        try {
-          if (!re.test(hay)) { line.style.display = 'none'; return; }
-        } catch(e) {
-          if (!hay.toLowerCase().includes(q.toLowerCase())) { line.style.display = 'none'; return; }
-        }
+      if (re instanceof RegExp) {
+        if (!re.test(hay)) visible = false;
       } else {
-        if (!hay.toLowerCase().includes(q.toLowerCase())) { line.style.display = 'none'; return; }
+        if (!hay.toLowerCase().includes(q.toLowerCase())) visible = false;
       }
     }
-    line.style.display = 'flex';
+    line.style.display = visible ? 'flex' : 'none';
   });
+  applySorting();
+}
+
+function applySorting() {
+  const container = document.getElementById('linesContainer');
+  if (!container) return;
+  const lines = Array.from(container.querySelectorAll('.line')).filter(l => l.style.display !== 'none');
+  if (!lines.length) return;
+
+  const levelPriority = { error: 5, warning: 4, info: 3, debug: 2, trace: 1, normal: 0 };
+
+  lines.sort((a, b) => {
+    if (currentSort === 'level') {
+      const priA = levelPriority[a.className.match(/(error|warning|info|debug|trace|normal)/)?.[0] || 'normal'] || 0;
+      const priB = levelPriority[b.className.match(/(error|warning|info|debug|trace|normal)/)?.[0] || 'normal'] || 0;
+      let cmp = priB - priA; // desc: higher priority first
+      if (currentOrder === 'asc') cmp = priA - priB;
+      if (cmp !== 0) return cmp;
+      // secondary sort by time
+      const tsA = new Date(a.dataset.timestamp || 0).getTime();
+      const tsB = new Date(b.dataset.timestamp || 0).getTime();
+      return tsB - tsA; // newest first
+    } else { // time
+      const tsA = new Date(a.dataset.timestamp || 0).getTime();
+      const tsB = new Date(b.dataset.timestamp || 0).getTime();
+      let cmp = tsB - tsA; // desc: newest first
+      if (currentOrder === 'asc') cmp = tsA - tsB;
+      return cmp;
+    }
+  });
+
+  // reappend in sorted order
+  lines.forEach(line => container.appendChild(line));
+}
+
+function attachSortListeners() {
+  if (sortBySelect) {
+    sortBySelect.onchange = () => {
+      currentSort = sortBySelect.value;
+      updateSortOrderBtn();
+      doFilter();
+    };
+  }
+  if (sortOrderBtn) {
+    sortOrderBtn.onclick = () => {
+      currentOrder = currentOrder === 'desc' ? 'asc' : 'desc';
+      updateSortOrderBtn();
+      doFilter();
+    };
+  }
+  updateSortOrderBtn();
+}
+
+function updateSortOrderBtn() {
+  if (!sortOrderBtn) return;
+  if (currentSort === 'time') {
+    sortOrderBtn.innerText = currentOrder === 'desc' ? 'Новейшие сначала' : 'Старейшие сначала';
+  } else {
+    sortOrderBtn.innerText = currentOrder === 'desc' ? 'Критические сначала' : 'Менее критические сначала';
+  }
 }
 
 function markSelectedAsRead() {
@@ -374,29 +438,34 @@ function attachAdvancedFiltering() {
 
 function applyAdvancedFilter() {
   const resource = advResourceType.value.trim();
-  const startTs = advStart.value.trim();
-  const endTs = advEnd.value.trim();
-  let query = '';
-  if (resource) query += resource;
+  const startDate = advStartDate.value;
+  const startTime = advStartTime.value || '00:00';
+  const endDate = advEndDate.value;
+  const endTime = advEndTime.value || '23:59';
+  let startTs = '';
+  let endTs = '';
+  if (startDate) startTs = `${startDate}T${startTime}:00`;
+  if (endDate) endTs = `${endDate}T${endTime}:59`;
+  let query = resource;
+  searchInput.value = query;
   if (startTs || endTs) {
-    // For timestamp range, we need to filter in logs tab
     document.querySelector('.tab-btn[data-tab="logsTab"]').click();
     filterByTimestampRange(startTs, endTs);
   }
-  searchInput.value = query;
   doFilter();
 }
 
 function clearAdvancedFilter() {
   advResourceType.value = '';
-  advStart.value = '';
-  advEnd.value = '';
+  advStartDate.value = '';
+  advStartTime.value = '';
+  advEndDate.value = '';
+  advEndTime.value = '';
   searchInput.value = '';
   doFilter();
 }
 
 function filterByTimestampRange(start, end) {
-  // Implement timestamp range filter by hiding lines outside range
   const startDate = start ? new Date(start) : null;
   const endDate = end ? new Date(end) : null;
   const container = document.getElementById('linesContainer');
