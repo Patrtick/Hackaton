@@ -17,6 +17,7 @@ const tsRegexes = [
 ];
 
 function extractTimestamp(text) {
+  if (!text) return null;
   for (const r of tsRegexes) {
     const m = text.match(r);
     if (m) {
@@ -30,6 +31,7 @@ function extractTimestamp(text) {
 }
 
 function determineLevel(text) {
+  if (!text) return 'normal';
   const low = text.toLowerCase();
   if (/\bpanic\b|\bfatal\b|\berror\b|exception|failed/i.test(text)) return 'error';
   if (/\bwarn(ing)?\b/.test(low)) return 'warning';
@@ -42,20 +44,16 @@ function determineLevel(text) {
 // extract tf_http bodies or json substrings
 function extractJsonFields(line) {
   const fields = {};
-  // search for keys like tf_http_req_body or tf_http_res_body in JSON-like object or plain text
   const keyPattern = /(tf_http_(req|res)_body)\s*[:=]\s*(\{[\s\S]*\})/i;
   const m = line.match(keyPattern);
   if (m) {
     try {
       const parsed = JSON.parse(m[3]);
-      fields[m[1]] = { collapsed: true, preview: JSON.stringify(parsed).slice(0, 200) + (JSON.stringify(parsed).length>200 ? '...':''),
-                       full: JSON.stringify(parsed, null, 2) };
+      fields[m[1]] = { collapsed: true, preview: JSON.stringify(parsed).slice(0, 200) + (JSON.stringify(parsed).length>200 ? '...':''), full: JSON.stringify(parsed, null, 2) };
     } catch(e) {
-      // fallback: store raw substring
       fields[m[1]] = { collapsed: true, preview: m[3].slice(0,200) + '...', full: m[3] };
     }
   }
-  // also try to find any {...} JSON block and keep small preview (but not too greedy)
   const jsonMatch = line.match(/\{(?:[^{}]|(?:\{[^{}]*\}))*\}/);
   if (jsonMatch && Object.keys(fields).length === 0) {
     try {
@@ -69,33 +67,40 @@ function extractJsonFields(line) {
 }
 
 function parseFileText(text) {
-  // Support two formats:
-  // 1) JSONL: each line is a JSON object (Terraform -json logging)
-  // 2) Plain text logs where each line is a text line or combined output
-  const linesRaw = text.split(/\r?\n/).filter(Boolean);
+  const linesRaw = text.split(/\r?\n/);
   const parsedLines = [];
   const stats = { levels: {}, total: 0 };
-  const sections = []; // plan/apply markers
+  const sections = [];
   let currentSection = null;
   const errors = [];
+  const groups = {}; // tf_req_id => [indices]
+  const resourceCounts = {};
+  const providerCounts = {};
+  const timeline = {};
+  const timelineErrors = {}; // timeline bucket => error count
+  const timestampIndex = []; // list of timestamps for range queries
 
   for (let i = 0; i < linesRaw.length; i++) {
     const raw = linesRaw[i];
+    if (raw === undefined || raw === null) continue;
+    // keep even empty lines as possible separators but skip completely empty to reduce noise
+    if (raw.trim() === '') continue;
+
     let obj = null;
-    // try JSON parse
     try { obj = JSON.parse(raw); } catch(e) { obj = null; }
 
     let textLine = raw;
     let timestamp = null;
     let level = null;
     let jsonFields = null;
+    let tfReqId = null;
+    let resourceType = null;
 
     if (obj && typeof obj === 'object') {
-      // pick message if present
+      // get message, timestamp, level
       textLine = obj['@message'] || obj.message || obj.msg || JSON.stringify(obj);
       timestamp = obj['@timestamp'] || extractTimestamp(JSON.stringify(obj)) || null;
       level = (obj['@level'] || obj.level || determineLevel(textLine)).toString().toLowerCase();
-      // extract tf_http bodies if exist
       jsonFields = {};
       if (obj.tf_http_req_body) {
         try {
@@ -113,17 +118,24 @@ function parseFileText(text) {
           jsonFields['tf_http_res_body'] = { collapsed:true, preview: String(obj.tf_http_res_body).slice(0,200), full: String(obj.tf_http_res_body) };
         }
       }
+      if (obj.tf_req_id) tfReqId = String(obj.tf_req_id);
+      if (obj.tf_resource_type) resourceType = String(obj.tf_resource_type);
       if (Object.keys(jsonFields).length === 0) jsonFields = null;
     } else {
-      // plain text heuristics
       textLine = raw;
       timestamp = extractTimestamp(raw);
       level = determineLevel(raw);
-      jsonFields = Object.keys(extractJsonFields(raw)).length ? extractJsonFields(raw) : null;
+      const extracted = extractJsonFields(raw);
+      jsonFields = Object.keys(extracted).length ? extracted : null;
+      // try to find tf_req_id or tf_resource_type in plain text
+      const mreq = raw.match(/tf_req_id["']?\s*[:=]\s*["']?([A-Za-z0-9_\-:.]+)["']?/i);
+      if (mreq) tfReqId = mreq[1];
+      const mres = raw.match(/tf_resource_type["']?\s*[:=]\s*["']?([A-Za-z0-9_:\-\.]+)["']?/i);
+      if (mres) resourceType = mres[1];
     }
 
-    // detect start/end of plan/apply sections heuristics
-    const tl = textLine.toLowerCase();
+    // detect plan/apply sections heuristics
+    const tl = (textLine || '').toLowerCase();
     if (/an execution plan has been generated|terraform will perform the following actions|^#\s+resource/i.test(tl) || /planning to/i.test(tl) || /^plan: .* to add/i.test(tl)) {
       currentSection = { type: 'plan', start: i };
       sections.push(currentSection);
@@ -138,16 +150,59 @@ function parseFileText(text) {
 
     const cls = (level === 'error' ? 'error' : level === 'warning' ? 'warning' : level === 'info' ? 'info' : (level === 'debug' ? 'debug' : 'normal'));
 
-    const parsed = { text: textLine, raw, cls, level, timestamp, jsonFields };
+    const parsed = { text: textLine, raw, cls, level, timestamp, jsonFields, tf_req_id: tfReqId, tf_resource_type: resourceType };
     parsedLines.push(parsed);
 
     // stats
     stats.levels[cls] = (stats.levels[cls] || 0) + 1;
     stats.total++;
 
-    // collect errors for error panel
+    // errors
     if (cls === 'error') {
       errors.push({ idx: parsedLines.length - 1, text: textLine, timestamp, raw });
+    }
+
+    // groups
+    if (tfReqId) {
+      groups[tfReqId] = groups[tfReqId] || [];
+      groups[tfReqId].push(parsedLines.length - 1);
+    }
+
+    // resource/provider frequency
+    const resourceRegex1 = /#\s*(?:module\.)?([^\s.]+)\.([^\s\[]+)/; // "# module.mod_name.resource_type"
+    const resourceRegex2 = /resource\s+"([^"]+)"/i; // resource "aws_instance"
+    const providerRegex = /provider\["?([^"\]]+)"?\]/i;
+    let m1 = textLine.match(resourceRegex1);
+    if (m1) {
+      const r = m1[2];
+      resourceCounts[r] = (resourceCounts[r] || 0) + 1;
+    }
+    let m2 = textLine.match(resourceRegex2);
+    if (m2) {
+      const r = m2[1];
+      resourceCounts[r] = (resourceCounts[r] || 0) + 1;
+    }
+    let mp = textLine.match(providerRegex);
+    if (mp) {
+      const p = mp[1];
+      providerCounts[p] = (providerCounts[p] || 0) + 1;
+    }
+    if (resourceType) {
+      resourceCounts[resourceType] = (resourceCounts[resourceType] || 0) + 1;
+    }
+
+    // timeline buckets by minute for plotting
+    if (timestamp) {
+      const d = new Date(timestamp);
+      if (!isNaN(d.getTime())) {
+        d.setSeconds(0,0);
+        const key = d.toISOString();
+        timeline[key] = (timeline[key] || 0) + 1;
+        timestampIndex.push({ idx: parsedLines.length - 1, ts: key });
+        if (cls === 'error') {
+          timelineErrors[key] = (timelineErrors[key] || 0) + 1;
+        }
+      }
     }
   }
 
@@ -156,14 +211,14 @@ function parseFileText(text) {
     const start = sec.start || 0;
     const end = sec.end != null ? sec.end : parsedLines.length - 1;
     for (let j = start; j <= end; j++) {
-      parsedLines[j].section = sec.type;
+      if (parsedLines[j]) parsedLines[j].section = sec.type;
     }
   }
 
   // plan summary: search for "Plan: X to add, Y to change, Z to destroy" in any line
   const planSummary = { adds: 0, changes: 0, destroys: 0, found: false };
   for (const pl of parsedLines) {
-    const m = pl.text.match(/Plan:\s*(\d+)\s*to add,\s*(\d+)\s*to change,\s*(\d+)\s*to destroy/i);
+    const m = (pl.text || '').match(/Plan:\s*(\d+)\s*to add,\s*(\d+)\s*to change,\s*(\d+)\s*to destroy/i);
     if (m) {
       planSummary.adds = parseInt(m[1],10);
       planSummary.changes = parseInt(m[2],10);
@@ -173,42 +228,6 @@ function parseFileText(text) {
     }
   }
 
-  // resource/provider frequency: look for patterns like provider/resource_type or tf resource lines "# module.name.resource_type[...]" or "resource \"TYPE\" \"NAME\""
-  const resourceCounts = {};
-  const providerCounts = {};
-  const resourceRegex1 = /#\s*(?:module\.)?([^\s.]+)\.([^\s\[]+)/; // "# module.mod_name.resource_type"
-  const resourceRegex2 = /resource\s+"([^"]+)"/i; // resource "aws_instance"
-  const providerRegex = /provider\["?([^"\]]+)"?\]/i;
-
-  for (const pl of parsedLines) {
-    let m1 = pl.text.match(resourceRegex1);
-    if (m1) {
-      const r = m1[2];
-      resourceCounts[r] = (resourceCounts[r] || 0) + 1;
-    }
-    let m2 = pl.text.match(resourceRegex2);
-    if (m2) {
-      const r = m2[1];
-      resourceCounts[r] = (resourceCounts[r] || 0) + 1;
-    }
-    let mp = pl.text.match(providerRegex);
-    if (mp) {
-      const p = mp[1];
-      providerCounts[p] = (providerCounts[p] || 0) + 1;
-    }
-  }
-
-  // timeline buckets by minute for plotting
-  const timeline = {};
-  for (const pl of parsedLines) {
-    if (!pl.timestamp) continue;
-    const d = new Date(pl.timestamp);
-    if (isNaN(d.getTime())) continue;
-    d.setSeconds(0,0);
-    const key = d.toISOString();
-    timeline[key] = (timeline[key] || 0) + 1;
-  }
-
   return {
     lines: parsedLines,
     stats,
@@ -216,7 +235,10 @@ function parseFileText(text) {
     planSummary,
     resourceCounts,
     providerCounts,
-    timeline
+    timeline,
+    timelineErrors,
+    groups,
+    timestampIndex
   };
 }
 
